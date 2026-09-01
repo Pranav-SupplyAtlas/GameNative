@@ -2409,4 +2409,23 @@
     <string name="binding_mode_sequence">Sequence</string>
     <string name="binding_sequence_delay_ms">Sequence delay (ms)</string>
     <string name="binding_sequence_current_format">%1$s (%2$d ms)</string>
+    <string name="choose_game_container">Choose a game container</string>
+    <string name="create_new_container_recommended">Create new container (Recommended)</string>
+    <string name="use_existing_container">Use existing container</string>
+    <string name="shared_container_row_summary">%1$d linked games • %2$s</string>
+    <string name="container_compatible">Compatible</string>
+    <string name="container_profile_difference">Launch-profile-only difference</string>
+    <string name="container_base_conflict">Shared-base conflict</string>
+    <string name="shared_container_conflict_title">Shared container conflict</string>
+    <string name="shared_container_conflict_message">This game recommends a different shared-prefix configuration: %1$s. Changing the shared base could affect linked games.</string>
+    <string name="create_recommended_container">Create new with recommended base</string>
+    <string name="retain_shared_container_base">Use selected and retain shared base</string>
+    <string name="continue_text">Continue</string>
+    <string name="configuration_scope">Configuration scope</string>
+    <string name="this_game_launch_profile">This game’s launch profile</string>
+    <string name="shared_container_defaults">Shared container defaults</string>
+    <string name="shared_defaults_affect_games">Shared defaults affect all linked games: %1$s</string>
+    <string name="shared_container_busy_title">Shared container is busy</string>
+    <string name="shared_container_busy_message">%1$s is currently using this container. Close that game and try again.</string>
+    <string name="confirm_shared_defaults_save">Save shared container defaults?</string>
 </resources>

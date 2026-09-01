@@ -13,6 +13,14 @@ object GameContainerRepository {
 
     fun binding(appId: String): GameContainerBinding? = if (isInitialized()) dao.binding(appId) else null
     fun profile(appId: String): GameLaunchProfile? = if (isInitialized()) dao.profile(appId) else null
+    fun saveProfile(profile: GameLaunchProfile) {
+        check(isInitialized())
+        val now = System.currentTimeMillis()
+        val old = dao.profile(profile.appId)
+        dao.upsertProfile(profile.copy(createdAt = old?.createdAt ?: profile.createdAt.takeIf { it > 0 } ?: now, updatedAt = now))
+    }
+
+    fun resetProfile(appId: String) { if (isInitialized()) dao.deleteProfile(appId) }
     fun linkedGames(containerId: String): List<GameContainerBinding> =
         if (isInitialized()) dao.bindings(containerId) else emptyList()
 

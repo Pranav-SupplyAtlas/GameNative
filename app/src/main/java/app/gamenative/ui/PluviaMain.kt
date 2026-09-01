@@ -104,6 +104,7 @@ import app.gamenative.ui.util.LocalSnackbarHostController
 import app.gamenative.ui.util.SnackbarManager
 import app.gamenative.utils.BestConfigService
 import app.gamenative.utils.ContainerUtils
+import app.gamenative.utils.ContainerUseLease
 import app.gamenative.utils.DebugReportUtils
 import app.gamenative.utils.PlatformAuthUtils
 import app.gamenative.utils.CustomGameScanner
@@ -1909,7 +1910,21 @@ fun preLaunchApp(
         // change launch-mode flags (e.g. bionic Steam) that the download/dependency steps
         // below and MainViewModel.launchApp consume, so this must run first.
         try {
-            GameFixesRegistry.applyFor(context, appId, container)
+            ContainerUseLease.acquire(container.id, appId, ContainerUseLease.Kind.PREFIX_MUTATION).use {
+                GameFixesRegistry.applyFor(context, appId, container)
+            }
+        } catch (busy: ContainerUseLease.BusyException) {
+            setLoadingDialogVisible(false)
+            setMessageDialogState(
+                MessageDialogState(
+                    visible = true,
+                    type = DialogType.SYNC_FAIL,
+                    title = context.getString(R.string.shared_container_busy_title),
+                    message = context.getString(R.string.shared_container_busy_message, busy.owner.appId),
+                    dismissBtnText = context.getString(R.string.ok),
+                ),
+            )
+            return@launch
         } catch (e: Exception) {
             Timber.tag("GameFixes").w(e, "Game fixes failed in preLaunchApp")
         }

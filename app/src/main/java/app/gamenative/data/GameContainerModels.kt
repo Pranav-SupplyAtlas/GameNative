@@ -6,6 +6,8 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 @Entity(tableName = "game_container_binding", indices = [Index("container_id")])
 data class GameContainerBinding(
@@ -55,4 +57,33 @@ data class ContainerConfigPatch(
     val enableXInput: Boolean? = null,
     val enableDInput: Boolean? = null,
     val disableMouseInput: Boolean? = null,
-)
+) {
+    companion object {
+        private val json = Json { encodeDefaults = false; ignoreUnknownKeys = true }
+        fun decode(value: String?): ContainerConfigPatch =
+            value?.takeIf(String::isNotBlank)?.let { runCatching { json.decodeFromString<ContainerConfigPatch>(it) }.getOrNull() }
+                ?: ContainerConfigPatch()
+    }
+
+    fun encode(): String = json.encodeToString(this)
+
+    /** Values present in [newer] replace this patch; null always means inherit. */
+    fun merge(newer: ContainerConfigPatch) = ContainerConfigPatch(
+        screenSize = newer.screenSize ?: screenSize,
+        environment = newer.environment ?: environment,
+        cpuList = newer.cpuList ?: cpuList,
+        cpuListWoW64 = newer.cpuListWoW64 ?: cpuListWoW64,
+        graphicsDriver = newer.graphicsDriver ?: graphicsDriver,
+        graphicsDriverVersion = newer.graphicsDriverVersion ?: graphicsDriverVersion,
+        dxWrapper = newer.dxWrapper ?: dxWrapper,
+        dxWrapperConfig = newer.dxWrapperConfig ?: dxWrapperConfig,
+        rendererPresentMode = newer.rendererPresentMode ?: rendererPresentMode,
+        displayRenderer = newer.displayRenderer ?: displayRenderer,
+        audioDriver = newer.audioDriver ?: audioDriver,
+        box86Preset = newer.box86Preset ?: box86Preset,
+        box64Preset = newer.box64Preset ?: box64Preset,
+        enableXInput = newer.enableXInput ?: enableXInput,
+        enableDInput = newer.enableDInput ?: enableDInput,
+        disableMouseInput = newer.disableMouseInput ?: disableMouseInput,
+    )
+}

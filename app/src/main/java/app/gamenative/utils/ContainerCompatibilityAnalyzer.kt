@@ -23,7 +23,12 @@ object ContainerCompatibilityAnalyzer {
             if (current.wincomponents != requested.wincomponents) add("Wine components")
             if (mutatesPrefix) add("prefix installer or registry fix")
         }
-        val patch = ContainerConfigPatch(
+        val patch = runtimePatch(current, requested)
+        if (conflicts.isNotEmpty()) return Result.SharedBaseConflict(conflicts, patch)
+        return if (patch == ContainerConfigPatch()) Result.Compatible else Result.LaunchProfileOnly(patch)
+    }
+
+    fun runtimePatch(current: ContainerData, requested: ContainerData) = ContainerConfigPatch(
             screenSize = requested.screenSize.takeIf { it != current.screenSize },
             environment = requested.envVars.takeIf { it != current.envVars },
             cpuList = requested.cpuList.takeIf { it != current.cpuList },
@@ -40,8 +45,5 @@ object ContainerCompatibilityAnalyzer {
             enableXInput = requested.enableXInput.takeIf { it != current.enableXInput },
             enableDInput = requested.enableDInput.takeIf { it != current.enableDInput },
             disableMouseInput = requested.disableMouseInput.takeIf { it != current.disableMouseInput },
-        )
-        if (conflicts.isNotEmpty()) return Result.SharedBaseConflict(conflicts, patch)
-        return if (patch == ContainerConfigPatch()) Result.Compatible else Result.LaunchProfileOnly(patch)
-    }
+    )
 }

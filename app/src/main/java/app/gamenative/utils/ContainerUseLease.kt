@@ -9,14 +9,26 @@ object ContainerUseLease {
     class BusyException(val containerId: String, val owner: Owner) : IllegalStateException(
         "$containerId is currently used by ${owner.appId}",
     )
-    private val active = ConcurrentHashMap<String, Owner>()
+    private data class Entry(val owner: Owner, var references: Int)
+    private val active = ConcurrentHashMap<String, Entry>()
 
     fun acquire(containerId: String, appId: String, kind: Kind): AutoCloseable {
         val owner = Owner(appId, kind)
-        val existing = active.putIfAbsent(containerId, owner)
-        if (existing != null) throw BusyException(containerId, existing)
-        return AutoCloseable { active.remove(containerId, owner) }
+        synchronized(active) {
+            val existing = active[containerId]
+            if (existing != null) {
+                if (existing.owner.appId != appId) throw BusyException(containerId, existing.owner)
+                existing.references++
+            } else active[containerId] = Entry(owner, 1)
+        }
+        return AutoCloseable {
+            synchronized(active) {
+                active[containerId]?.takeIf { it.owner.appId == appId }?.let {
+                    if (--it.references == 0) active.remove(containerId)
+                }
+            }
+        }
     }
 
-    fun owner(containerId: String): Owner? = active[containerId]
+    fun owner(containerId: String): Owner? = active[containerId]?.owner
 }

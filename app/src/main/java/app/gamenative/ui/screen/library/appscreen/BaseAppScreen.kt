@@ -30,6 +30,7 @@ import app.gamenative.R
 import app.gamenative.api.isValidCommunityConfig
 import app.gamenative.api.prepareCommunityConfigForApply
 import app.gamenative.data.GameSource
+import app.gamenative.data.GameLaunchProfile
 import app.gamenative.data.FavoritesManager
 import app.gamenative.data.LibraryItem
 import app.gamenative.events.AndroidEvent
@@ -37,6 +38,7 @@ import app.gamenative.mods.ModContainerResolver
 import app.gamenative.mods.NexusModManager
 import app.gamenative.ui.component.dialog.CommunityConfigsDialog
 import app.gamenative.ui.component.dialog.ContainerConfigDialog
+import app.gamenative.ui.component.dialog.ContainerSelectionDialog
 import app.gamenative.ui.component.dialog.LoadingDialog
 import app.gamenative.ui.component.dialog.NexusModsDialog
 import app.gamenative.ui.data.AppMenuOption
@@ -47,6 +49,9 @@ import app.gamenative.ui.util.ContainerConfigTransfer
 import app.gamenative.ui.util.SnackbarManager
 import app.gamenative.utils.BestConfigService
 import app.gamenative.utils.ContainerUtils
+import app.gamenative.utils.ContainerSelectionCoordinator
+import app.gamenative.utils.GameContainerRepository
+import app.gamenative.utils.CustomGameScanner
 import app.gamenative.utils.DiagnosticsLog
 import app.gamenative.utils.GameCompatibilityCache
 import app.gamenative.utils.GameCompatibilityService
@@ -857,6 +862,12 @@ abstract class BaseAppScreen {
      * This is common behavior for all game sources.
      */
     protected fun resetContainerToDefaults(context: Context, libraryItem: LibraryItem) {
+        val binding = GameContainerRepository.binding(libraryItem.appId)
+        if (binding != null && GameContainerRepository.linkedGames(binding.containerId).size > 1) {
+            GameContainerRepository.resetProfile(libraryItem.appId)
+            SnackbarManager.show("Game launch profile reset; shared container defaults were retained")
+            return
+        }
         val container = ContainerUtils.getOrCreateContainer(context, libraryItem.appId)
         val defaults = ContainerUtils.getDefaultContainerData().copy(drives = container.drives)
 
@@ -1293,6 +1304,9 @@ abstract class BaseAppScreen {
         var showConfigDialog by androidx.compose.runtime.remember {
             androidx.compose.runtime.mutableStateOf(false)
         }
+        var showEditScopeDialog by remember { mutableStateOf(false) }
+        var editingGameProfile by remember { mutableStateOf(false) }
+        var pendingSharedBaseSave by remember { mutableStateOf<ContainerData?>(null) }
         var containerData by androidx.compose.runtime.remember {
             androidx.compose.runtime.mutableStateOf(ContainerData())
         }
@@ -1300,9 +1314,50 @@ abstract class BaseAppScreen {
             mutableStateOf<ContainerData?>(null)
         }
 
+        var showContainerSelection by remember(appId) { mutableStateOf(false) }
+        var pendingContainerAction by remember(appId) { mutableStateOf<(() -> Unit)?>(null) }
+        var requestedContainerData by remember(appId) { mutableStateOf(ContainerUtils.getDefaultContainerData()) }
+        LaunchedEffect(appId, displayInfo.name) {
+            if (libraryItem.gameSource == GameSource.CUSTOM_GAME) return@LaunchedEffect
+            runCatching {
+                val recommendation = BestConfigService.fetchBestConfig(
+                    gameName = displayInfo.name,
+                    gpuName = GPUInformation.getRenderer(context),
+                    gameStore = libraryItem.gameSource.name,
+                ) ?: return@runCatching
+                val values = BestConfigService.parseConfigToContainerData(
+                    context,
+                    recommendation.bestConfig,
+                    recommendation.matchType,
+                    true,
+                    recommendation.matchedStore.equals(libraryItem.gameSource.name, ignoreCase = true),
+                    matchedGpu = recommendation.matchedGpu,
+                )
+                if (!values.isNullOrEmpty()) {
+                    requestedContainerData = ContainerUtils.applyBestConfigMapToContainerData(requestedContainerData, values)
+                }
+            }.onFailure { Timber.w(it, "Unable to resolve recommended container configuration for $appId") }
+        }
+
+        fun requireContainerSelection(action: () -> Unit) {
+            if (GameContainerRepository.binding(appId) != null || ContainerUtils.hasContainer(context, appId)) action()
+            else {
+                pendingContainerAction = action
+                showContainerSelection = true
+            }
+        }
+
         val onEditContainer: () -> Unit = {
-            containerData = loadContainerData(context, libraryItem)
-            showConfigDialog = true
+            requireContainerSelection {
+                val binding = GameContainerRepository.binding(appId)
+                if (binding != null && GameContainerRepository.linkedGames(binding.containerId).size > 1) {
+                    showEditScopeDialog = true
+                } else {
+                    editingGameProfile = false
+                    containerData = loadContainerData(context, libraryItem)
+                    showConfigDialog = true
+                }
+            }
         }
 
         // Export for Frontend launcher
@@ -1579,10 +1634,12 @@ abstract class BaseAppScreen {
                 if (app.gamenative.launch.LaunchReadiness.pending) {
                     showReadiness = true
                 } else {
-                    onDownloadInstallClick(context, libraryItem, onClickPlay)
-                    uiScope.launch {
-                        delay(100)
-                        performStateRefresh(true)
+                    requireContainerSelection {
+                        onDownloadInstallClick(context, libraryItem, onClickPlay)
+                        uiScope.launch {
+                            delay(100)
+                            performStateRefresh(true)
+                        }
                     }
                 }
             },
@@ -1608,25 +1665,129 @@ abstract class BaseAppScreen {
             app.gamenative.launch.LaunchReadiness.Prompt(launchActivity) {
                 showReadiness = false
                 if (!app.gamenative.launch.LaunchReadiness.pending) {
-                    onDownloadInstallClick(context, libraryItem, onClickPlay)
-                    uiScope.launch {
-                        delay(100)
-                        performStateRefresh(true)
+                    requireContainerSelection {
+                        onDownloadInstallClick(context, libraryItem, onClickPlay)
+                        uiScope.launch {
+                            delay(100)
+                            performStateRefresh(true)
+                        }
                     }
                 }
             }
         }
 
+        if (showContainerSelection) {
+            val prefixMutatingInstall = libraryItem.gameSource != GameSource.CUSTOM_GAME
+            val candidates = ContainerSelectionCoordinator.containers(context).map { candidate ->
+                candidate to ContainerSelectionCoordinator.review(
+                    context, candidate.id, requestedContainerData, prefixMutatingInstall,
+                ).compatibility
+            }
+            ContainerSelectionDialog(
+                requestedSummary = "${requestedContainerData.containerVariant} • ${requestedContainerData.wineVersion} • ${requestedContainerData.graphicsDriver}",
+                containers = candidates,
+                onDismiss = { showContainerSelection = false; pendingContainerAction = null },
+                onCommit = { choice ->
+                    val now = System.currentTimeMillis()
+                    val folder = getInstallPath(context, libraryItem)
+                        ?: if (libraryItem.gameSource == GameSource.CUSTOM_GAME) CustomGameScanner.getFolderPathFromAppId(appId) else null
+                    val executable = if (libraryItem.gameSource == GameSource.CUSTOM_GAME && folder != null) {
+                        CustomGameScanner.findUniqueExeRelativeToFolder(folder)
+                    } else null
+                    val profile = GameLaunchProfile(
+                        appId = appId,
+                        gameFolderPath = folder,
+                        executablePath = executable,
+                        createdAt = now,
+                        updatedAt = now,
+                    )
+                    val selected = ContainerSelectionCoordinator.commit(appId, choice, profile)
+                    if (selected != null && choice is ContainerSelectionCoordinator.Choice.CreateNewContainer) {
+                        ContainerUtils.getOrCreateContainer(context, appId)
+                        ContainerUtils.saveSharedContainerBase(context, selected, requestedContainerData)
+                    }
+                    showContainerSelection = false
+                    pendingContainerAction?.invoke()
+                    pendingContainerAction = null
+                },
+            )
+        }
+
+        if (showEditScopeDialog) {
+            val binding = GameContainerRepository.binding(appId)
+            val linked = binding?.let { GameContainerRepository.linkedGames(it.containerId) }.orEmpty()
+            AlertDialog(
+                onDismissRequest = { showEditScopeDialog = false },
+                title = { Text(stringResource(R.string.configuration_scope)) },
+                text = { Text(stringResource(R.string.shared_defaults_affect_games, linked.joinToString { it.appId })) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        editingGameProfile = true
+                        containerData = loadContainerData(context, libraryItem)
+                        showEditScopeDialog = false
+                        showConfigDialog = true
+                    }) { Text(stringResource(R.string.this_game_launch_profile)) }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        editingGameProfile = false
+                        containerData = loadContainerData(context, libraryItem)
+                        showEditScopeDialog = false
+                        showConfigDialog = true
+                    }) { Text(stringResource(R.string.shared_container_defaults)) }
+                },
+            )
+        }
+
         // Show container config dialog if needed
         if (showConfigDialog) {
             ContainerConfigDialog(
-                title = "${displayInfo.name} Config",
+                title = if (editingGameProfile) stringResource(R.string.this_game_launch_profile) else stringResource(R.string.shared_container_defaults),
                 initialConfig = containerData,
                 onDismissRequest = { showConfigDialog = false },
                 onSave = {
-                    saveContainerConfig(context, libraryItem, it)
+                    if (editingGameProfile) {
+                        val old = GameContainerRepository.profile(appId)
+                        val base = ContainerUtils.toContainerData(ContainerUtils.getContainer(context, appId))
+                        GameContainerRepository.saveProfile(
+                            GameLaunchProfile(
+                                appId = appId,
+                                gameFolderPath = old?.gameFolderPath ?: getInstallPath(context, libraryItem),
+                                executablePath = it.executablePath.takeIf(String::isNotBlank),
+                                workingDirectory = old?.workingDirectory,
+                                launchArguments = it.execArgs.takeIf(String::isNotBlank),
+                                environmentOverrides = it.envVars.takeIf { env -> env != base.envVars },
+                                runtimeConfigPatch = app.gamenative.utils.ContainerCompatibilityAnalyzer.runtimePatch(base, it).encode(),
+                                createdAt = old?.createdAt ?: System.currentTimeMillis(),
+                                updatedAt = System.currentTimeMillis(),
+                            ),
+                        )
+                    } else {
+                        val binding = GameContainerRepository.binding(appId)
+                        if (binding != null && GameContainerRepository.linkedGames(binding.containerId).size > 1) {
+                            pendingSharedBaseSave = it
+                        } else if (binding != null) ContainerUtils.saveSharedContainerBase(context, binding.containerId, it)
+                        else saveContainerConfig(context, libraryItem, it)
+                    }
                     showConfigDialog = false
                 },
+            )
+        }
+
+        pendingSharedBaseSave?.let { proposed ->
+            val binding = GameContainerRepository.binding(appId)
+            val linked = binding?.let { GameContainerRepository.linkedGames(it.containerId) }.orEmpty()
+            AlertDialog(
+                onDismissRequest = { pendingSharedBaseSave = null },
+                title = { Text(stringResource(R.string.confirm_shared_defaults_save)) },
+                text = { Text(stringResource(R.string.shared_defaults_affect_games, linked.joinToString { it.appId })) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        binding?.let { ContainerUtils.saveSharedContainerBase(context, it.containerId, proposed) }
+                        pendingSharedBaseSave = null
+                    }) { Text(stringResource(R.string.save)) }
+                },
+                dismissButton = { TextButton(onClick = { pendingSharedBaseSave = null }) { Text(stringResource(R.string.cancel)) } },
             )
         }
 

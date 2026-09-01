@@ -133,6 +133,7 @@ public class Container {
     private String language = "english";
 
     private ContainerManager containerManager;
+    private boolean runtimeCopy;
 
     private byte dinputMapperType = 1;  // 1=standard, 2=XInput mapper
     // Disable external mouse input
@@ -220,6 +221,16 @@ public class Container {
     public Container(String id) {
         this.id = id;
         this.name = "Container-"+id;
+    }
+
+    /** Detached metadata used by one launch; saveData is intentionally disabled. */
+    public static Container createRuntimeCopy(Container base) throws JSONException {
+        Container copy = new Container(base.id);
+        copy.rootDir = base.rootDir;
+        copy.containerManager = base.containerManager;
+        copy.loadData(new JSONObject(FileUtils.readString(base.getConfigFile())));
+        copy.runtimeCopy = true;
+        return copy;
     }
 
     public String getName() {
@@ -707,6 +718,10 @@ public class Container {
     }
 
     public void saveData() {
+        if (runtimeCopy) {
+            Log.d("Container", "Ignoring saveData on isolated runtime copy " + id);
+            return;
+        }
         try {
             JSONObject data = new JSONObject();
             data.put("id", id);
