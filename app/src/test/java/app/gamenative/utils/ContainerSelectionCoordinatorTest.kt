@@ -75,4 +75,23 @@ class ContainerSelectionCoordinatorTest {
         )
         assertEquals(snapshot, sharedBase)
     }
+
+    @Test fun `late create-new rebind preserves launch profile`() {
+        val dao = FakeDao().also(GameContainerRepository::initialize)
+        val now = System.currentTimeMillis()
+        val profile = GameLaunchProfile(
+            "STEAM_5",
+            gameFolderPath = "/games/five",
+            executablePath = "five.exe",
+            launchArguments = "-safe",
+            createdAt = now,
+            updatedAt = now,
+        )
+        GameContainerRepository.bind("STEAM_5", "shared", profile)
+        val generated = GameContainerRepository.newContainerId()
+        GameContainerRepository.bind("STEAM_5", generated, GameContainerRepository.profile("STEAM_5"))
+        assertEquals(generated, dao.binding("STEAM_5")?.containerId)
+        assertEquals("five.exe", dao.profile("STEAM_5")?.executablePath)
+        assertEquals("-safe", dao.profile("STEAM_5")?.launchArguments)
+    }
 }

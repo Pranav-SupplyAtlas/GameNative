@@ -10,6 +10,9 @@ data class PrefixMutationPlan(val reasons: List<String>) {
 }
 
 object PrefixMutationPlanner {
+    fun requiresLateDecision(linkedGameCount: Int, plan: PrefixMutationPlan): Boolean =
+        linkedGameCount > 1 && plan.mutatesPrefix
+
     fun planForContainer(context: Context, appId: String, container: Container, gameFolder: String?): PrefixMutationPlan {
         val pendingPreInstall = gameFolder?.let { folder ->
             val runtime = Container.createRuntimeCopy(container)

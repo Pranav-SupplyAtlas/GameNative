@@ -2428,4 +2428,6 @@
     <string name="shared_container_busy_title">Shared container is busy</string>
     <string name="shared_container_busy_message">%1$s is currently using this container. Close that game and try again.</string>
     <string name="confirm_shared_defaults_save">Save shared container defaults?</string>
+    <string name="late_prefix_mutation_title">This launch needs to change the Wine prefix</string>
+    <string name="late_prefix_mutation_message">Newly discovered setup work will modify this shared container: %1$s. Choose where it should run.</string>
 </resources>

@@ -1199,13 +1199,34 @@ object ContainerUtils {
         return merged.toString()
     }
 
-    private fun resolveGameFolderPath(appId: String): String? = when (extractGameSourceFromContainerId(appId)) {
+    fun resolveGameFolderPath(appId: String): String? = when (extractGameSourceFromContainerId(appId)) {
         GameSource.STEAM -> SteamService.getAppDirPath(extractGameIdFromContainerId(appId))
         GameSource.GOG -> GOGService.getInstallPath(extractGameIdFromContainerId(appId).toString())
         GameSource.EPIC -> EpicService.getInstallPath(extractGameIdFromContainerId(appId))
         GameSource.AMAZON -> AmazonService.getInstallPathByAppId(extractGameIdFromContainerId(appId))
         GameSource.CUSTOM_GAME -> CustomGameScanner.getFolderPathFromAppId(appId)
     }?.let { if (extractGameSourceFromContainerId(appId) == GameSource.CUSTOM_GAME) it else StorageUtils.resolveLegacyGameDir(it) }
+
+    suspend fun resolveRecommendedContainerData(context: Context, appId: String): ContainerData {
+        var requested = getDefaultContainerData()
+        val source = extractGameSourceFromContainerId(appId)
+        if (source == GameSource.CUSTOM_GAME) return requested
+        val recommendation = BestConfigService.fetchBestConfig(
+            gameName = resolveGameName(appId),
+            gpuName = GPUInformation.getRenderer(context),
+            gameStore = source.name,
+        ) ?: return requested
+        val values = BestConfigService.parseConfigToContainerData(
+            context,
+            recommendation.bestConfig,
+            recommendation.matchType,
+            true,
+            recommendation.matchedStore.equals(source.name, ignoreCase = true),
+            matchedGpu = recommendation.matchedGpu,
+        )
+        if (!values.isNullOrEmpty()) requested = applyBestConfigMapToContainerData(requested, values)
+        return requested
+    }
 
     /**
      * Deletes the container associated with the given appId, if it exists.

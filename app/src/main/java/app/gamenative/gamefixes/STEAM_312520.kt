@@ -13,6 +13,8 @@ private const val RAIN_WORLD_DLL_OVERRIDES_KEY =
 private const val RAIN_WORLD_WINHTTP_OVERRIDE = "winhttp=native,builtin"
 
 val STEAM_Fix_312520: KeyedGameFix = object : KeyedGameFix {
+    override val mutatesPrefix = true
+    override val mutationReason = "registry fix"
     override val gameSource = GameSource.STEAM
     override val gameId = "312520"
 
