@@ -642,18 +642,19 @@ object ContainerUtils {
     }
 
     fun getContainerId(appId: String): String {
-        return appId
+        return GameContainerRepository.binding(appId)?.containerId ?: appId
     }
 
     fun hasContainer(context: Context, appId: String): Boolean {
         val containerManager = ContainerManager(context)
-        return containerManager.hasContainer(appId)
+        return containerManager.hasContainer(getContainerId(appId))
     }
 
     fun getContainer(context: Context, appId: String): Container {
         val containerManager = ContainerManager(context)
-        return if (containerManager.hasContainer(appId)) {
-            containerManager.getContainerById(appId)
+        val containerId = getContainerId(appId)
+        return if (containerManager.hasContainer(containerId)) {
+            containerManager.getContainerById(containerId)
         } else {
             throw Exception("Container does not exist for game $appId")
         }
@@ -1011,12 +1012,21 @@ object ContainerUtils {
 
     fun getOrCreateContainer(context: Context, appId: String): Container {
         val containerManager = ContainerManager(context)
-
-        val container = if (containerManager.hasContainer(appId)) {
-            containerManager.getContainerById(appId)
+        val binding = GameContainerRepository.binding(appId)
+        val containerId = binding?.containerId ?: if (containerManager.hasContainer(appId)) {
+            // Preserve old xuser-<appId> prefixes exactly and record the one-to-one relation lazily.
+            GameContainerRepository.ensureLegacyBinding(appId).containerId
         } else {
-            createNewContainer(context, appId, appId, containerManager)
+            GameContainerRepository.newContainerId().also { GameContainerRepository.bind(appId, it) }
         }
+        val container = if (containerManager.hasContainer(containerId)) {
+            containerManager.getContainerById(containerId)
+        } else createNewContainer(context, appId, containerId, containerManager)
+
+        // Generated containers (dedicated or shared) never persist a game-specific drive. The
+        // immutable LaunchSession supplies it to the launcher. Legacy one-to-one prefixes retain
+        // their historical A: behavior until explicitly rebound.
+        if (containerId != appId) return container
 
         // Ensure Custom Games have the A: drive mapped to the game folder
         // and GOG games have a drive mapped to the GOG games directory
@@ -1103,42 +1113,39 @@ object ContainerUtils {
     }
 
     fun getOrCreateContainerWithOverride(context: Context, appId: String): Container {
-        val containerManager = ContainerManager(context)
-
-        return if (containerManager.hasContainer(appId)) {
-            val container = containerManager.getContainerById(appId)
-
-            // Apply temporary override if present (without saving to disk)
-            if (IntentLaunchManager.hasTemporaryOverride(appId)) {
-                val overrideConfig = IntentLaunchManager.getTemporaryOverride(appId)
-                if (overrideConfig != null) {
-                    // Backup original config before applying override (if not already backed up)
-                    if (IntentLaunchManager.getOriginalConfig(appId) == null) {
-                        val originalConfig = toContainerData(container)
-                        IntentLaunchManager.setOriginalConfig(appId, originalConfig)
-                    }
-
-                    // Get the effective config (merge base with override)
-                    val effectiveConfig = IntentLaunchManager.getEffectiveContainerConfig(context, appId)
-                    if (effectiveConfig != null) {
-                        applyToContainer(context, container, effectiveConfig, saveToDisk = false)
-                        Timber.i("Applied temporary config override to existing container for app $appId (in-memory only)")
-                    }
-                }
-            }
-
-            container
-        } else {
-            // Create new container with override config if present
-            val overrideConfig = if (IntentLaunchManager.hasTemporaryOverride(appId)) {
-                IntentLaunchManager.getTemporaryOverride(appId)
-            } else {
-                null
-            }
-
-            createNewContainer(context, appId, appId, containerManager, overrideConfig)
-        }
+        // Overrides are consumed by buildLaunchSession. Applying ContainerData here used to write
+        // user.reg even with saveToDisk=false and was unsafe for shared prefixes.
+        return getOrCreateContainer(context, appId)
     }
+
+    fun saveSharedContainerBase(context: Context, containerId: String, data: ContainerData) {
+        val container = ContainerManager(context).getContainerById(containerId)
+            ?: throw IllegalArgumentException("Unknown container $containerId")
+        applyToContainer(context, container, data, saveToDisk = true)
+    }
+
+    fun buildLaunchSession(context: Context, appId: String): LaunchSession {
+        val container = getOrCreateContainer(context, appId)
+        val profile = GameContainerRepository.profile(appId)
+        val folder = profile?.gameFolderPath ?: resolveGameFolderPath(appId)
+        return LaunchSession(
+            containerId = container.id,
+            appId = appId,
+            executablePath = profile?.executablePath ?: container.executablePath.takeIf { it.isNotBlank() },
+            workingDirectory = profile?.workingDirectory,
+            gameFolderPath = folder,
+            launchArguments = profile?.launchArguments ?: container.execArgs.takeIf { it.isNotBlank() },
+            environmentOverrides = profile?.environmentOverrides,
+        )
+    }
+
+    private fun resolveGameFolderPath(appId: String): String? = when (extractGameSourceFromContainerId(appId)) {
+        GameSource.STEAM -> SteamService.getAppDirPath(extractGameIdFromContainerId(appId))
+        GameSource.GOG -> GOGService.getInstallPath(extractGameIdFromContainerId(appId).toString())
+        GameSource.EPIC -> EpicService.getInstallPath(extractGameIdFromContainerId(appId))
+        GameSource.AMAZON -> AmazonService.getInstallPathByAppId(extractGameIdFromContainerId(appId))
+        GameSource.CUSTOM_GAME -> CustomGameScanner.getFolderPathFromAppId(appId)
+    }?.let { if (extractGameSourceFromContainerId(appId) == GameSource.CUSTOM_GAME) it else StorageUtils.resolveLegacyGameDir(it) }
 
     /**
      * Deletes the container associated with the given appId, if it exists.
@@ -1146,12 +1153,18 @@ object ContainerUtils {
     fun deleteContainer(context: Context, appId: String) {
         Timber.i("[ContainerDeletion] Attempting to delete container for appId=$appId")
         val manager = ContainerManager(context)
-        val hasContainer = manager.hasContainer(appId)
-        Timber.i("[ContainerDeletion] hasContainer($appId) = $hasContainer")
+        val containerId = getContainerId(appId)
+        val deletePhysicalContainer = GameContainerRepository.unbind(appId)
+        if (!deletePhysicalContainer) {
+            Timber.i("[ContainerDeletion] Unbound $appId; retained shared container $containerId")
+            return
+        }
+        val hasContainer = manager.hasContainer(containerId)
+        Timber.i("[ContainerDeletion] hasContainer($containerId) = $hasContainer")
         if (hasContainer) {
             // Remove the container directory asynchronously
             manager.removeContainerAsync(
-                manager.getContainerById(appId),
+                manager.getContainerById(containerId),
             ) {
                 Timber.i("[ContainerDeletion] Successfully deleted container for appId=$appId")
             }

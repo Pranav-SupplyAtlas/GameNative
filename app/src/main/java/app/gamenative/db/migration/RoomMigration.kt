@@ -27,6 +27,31 @@ internal val ROOM_MIGRATION_V24_to_V25 = object : Migration(24, 25) {
     }
 }
 
+internal val ROOM_MIGRATION_V25_to_V26 = object : Migration(25, 26) {
+    override fun migrate(connection: SQLiteConnection) {
+        connection.execSQL("""
+            CREATE TABLE IF NOT EXISTS `game_container_binding` (`app_id` TEXT NOT NULL,
+            `container_id` TEXT NOT NULL, `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL,
+            PRIMARY KEY(`app_id`))
+        """.trimIndent())
+        connection.execSQL("CREATE INDEX IF NOT EXISTS `index_game_container_binding_container_id` ON `game_container_binding` (`container_id`)")
+        connection.execSQL("""
+            CREATE TABLE IF NOT EXISTS `game_launch_profile` (`app_id` TEXT NOT NULL,
+            `game_folder_path` TEXT, `executable_path` TEXT, `working_directory` TEXT,
+            `launch_arguments` TEXT, `environment_overrides` TEXT, `runtime_config_patch` TEXT,
+            `created_at` INTEGER NOT NULL, `updated_at` INTEGER NOT NULL, PRIMARY KEY(`app_id`),
+            FOREIGN KEY(`app_id`) REFERENCES `game_container_binding`(`app_id`) ON UPDATE NO ACTION ON DELETE CASCADE)
+        """.trimIndent())
+        // Existing prefixes are deliberately neither renamed nor moved. Seed known installed games;
+        // lazy legacy binding covers custom/imported games and older incomplete store metadata.
+        val now = System.currentTimeMillis()
+        connection.execSQL("INSERT OR IGNORE INTO game_container_binding SELECT 'STEAM_' || id, 'STEAM_' || id, $now, $now FROM app_info WHERE is_downloaded = 1")
+        connection.execSQL("INSERT OR IGNORE INTO game_container_binding SELECT 'GOG_' || id, 'GOG_' || id, $now, $now FROM gog_games WHERE is_installed = 1")
+        connection.execSQL("INSERT OR IGNORE INTO game_container_binding SELECT 'EPIC_' || id, 'EPIC_' || id, $now, $now FROM epic_games WHERE is_installed = 1")
+        connection.execSQL("INSERT OR IGNORE INTO game_container_binding SELECT 'AMAZON_' || app_id, 'AMAZON_' || app_id, $now, $now FROM amazon_games WHERE is_installed = 1")
+    }
+}
+
 private fun migrateManagedModSourcesToV25(connection: SQLiteConnection) {
     connection.execSQL(
         """

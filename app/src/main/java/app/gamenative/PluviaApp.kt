@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.navigation.NavController
 import app.gamenative.db.dao.AmazonGameDao
 import app.gamenative.db.dao.GOGGameDao
+import app.gamenative.db.dao.GameContainerDao
 import app.gamenative.events.EventDispatcher
 import app.gamenative.mods.NexusAuthManager
 import app.gamenative.powercontrol.PowerManager
@@ -21,6 +22,7 @@ import app.gamenative.sync.FrontendSyncManager
 import app.gamenative.ui.screen.xserver.RadialMenuCoordinator
 import app.gamenative.utils.ContainerMigrator
 import app.gamenative.utils.IntentLaunchManager
+import app.gamenative.utils.GameContainerRepository
 import app.gamenative.utils.PlayIntegrity
 import app.gamenative.utils.downloader.ContainerFilesDownloader
 import java.io.File
@@ -53,6 +55,7 @@ class PluviaApp : SplitCompatApplication() {
 
     @Inject lateinit var gogGameDao: GOGGameDao
     @Inject lateinit var amazonGameDao: AmazonGameDao
+    @Inject lateinit var gameContainerDao: GameContainerDao
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -83,6 +86,7 @@ class PluviaApp : SplitCompatApplication() {
 
         // Init our datastore preferences.
         PrefManager.init(this)
+        GameContainerRepository.initialize(gameContainerDao)
         NexusAuthManager.initialize(this)
         FrontendSyncManager.init(this)
 
