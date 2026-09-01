@@ -11,6 +11,8 @@ import com.winlator.container.Container
 class CompositeGameFix(
     private val fixes: List<GameFix>,
 ) : GameFix {
+    override val mutatesPrefix = fixes.any(GameFix::mutatesPrefix)
+    override val mutationReason = fixes.mapNotNull(GameFix::mutationReason).distinct().joinToString().takeIf(String::isNotBlank)
     override fun apply(
         context: Context,
         gameId: String,
@@ -33,4 +35,10 @@ class KeyedCompositeGameFix(
     override val gameSource: GameSource,
     override val gameId: String,
     fixes: List<GameFix>,
-) : KeyedGameFix, GameFix by CompositeGameFix(fixes)
+) : KeyedGameFix {
+    private val composite = CompositeGameFix(fixes)
+    override val mutatesPrefix get() = composite.mutatesPrefix
+    override val mutationReason get() = composite.mutationReason
+    override fun apply(context: Context, gameId: String, installPath: String, installPathWindows: String, container: Container) =
+        composite.apply(context, gameId, installPath, installPathWindows, container)
+}

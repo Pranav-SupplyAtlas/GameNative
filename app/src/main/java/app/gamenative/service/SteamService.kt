@@ -1483,7 +1483,9 @@ class SteamService : Service(), IChallengeUrlChanged {
         fun downloadApp(appId: Int, dlcAppIds: List<Int>, branch: String = "public", isUpdateOrVerify: Boolean): DownloadInfo? {
             if (!checkWifiOrNotify()) return null
             return getAppInfoOf(appId)?.let { appInfo ->
-                val container = ContainerManager(instance!!.applicationContext).getContainerById("STEAM_${appId}")
+                val container = runCatching {
+                    ContainerUtils.getContainer(instance!!.applicationContext, "STEAM_$appId")
+                }.getOrNull()
                 val containerLanguage = if (container != null) {
                     container.language
                 } else {

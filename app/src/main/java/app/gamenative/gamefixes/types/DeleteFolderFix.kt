@@ -15,6 +15,8 @@ import timber.log.Timber
 class DeleteFolderFix(
     private val driveCRelativePaths: List<String>,
 ) : GameFix {
+    override val mutatesPrefix = true
+    override val mutationReason = "prefix cleanup"
     override fun apply(
         context: Context,
         gameId: String,
@@ -46,4 +48,7 @@ class KeyedDeleteFolderFix(
     override val gameSource: GameSource,
     override val gameId: String,
     driveCRelativePaths: List<String>,
-) : KeyedGameFix, GameFix by DeleteFolderFix(driveCRelativePaths)
+) : KeyedGameFix, GameFix by DeleteFolderFix(driveCRelativePaths) {
+    override val mutatesPrefix = true
+    override val mutationReason = "prefix cleanup"
+}

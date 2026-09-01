@@ -218,10 +218,9 @@ object CustomGameScanner {
 
         // 2) Try extracting from the selected container executable
         try {
-            val cm = ContainerManager(context)
-            if (cm.hasContainer(appId)) {
-                val container = cm.getContainerById(appId)
-                val relExe = container.executablePath
+            if (ContainerUtils.hasContainer(context, appId)) {
+                val relExe = GameContainerRepository.profile(appId)?.executablePath
+                    ?: ContainerUtils.getContainer(context, appId).executablePath
                 if (!relExe.isNullOrEmpty()) {
                     val exeFile = File(folder, relExe.replace('/', File.separatorChar))
                     if (exeFile.exists()) {

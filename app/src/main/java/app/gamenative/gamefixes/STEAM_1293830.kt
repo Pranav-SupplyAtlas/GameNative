@@ -23,6 +23,8 @@ private val FORZA_WEB_HELPER_BUILTIN_DLLS = listOf("dxgi", "d3d11", "d3d9")
  * falls back to software rendering while the game keeps DXVK.
  */
 val STEAM_Fix_1293830: KeyedGameFix = object : KeyedGameFix {
+    override val mutatesPrefix = true
+    override val mutationReason = "registry fix"
     override val gameSource = GameSource.STEAM
     override val gameId = "1293830"
 

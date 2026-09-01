@@ -9,6 +9,7 @@ import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.FileProvider
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,9 +19,11 @@ import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -35,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -66,7 +70,6 @@ import app.gamenative.enums.PathType
 import app.gamenative.enums.SaveLocation
 import app.gamenative.enums.SyncResult
 import app.gamenative.events.AndroidEvent
-import app.gamenative.gamefixes.GameFixesRegistry
 import app.gamenative.service.ActiveGameRegistry
 import app.gamenative.service.SteamService
 import app.gamenative.service.amazon.AmazonService
@@ -104,6 +107,14 @@ import app.gamenative.ui.util.LocalSnackbarHostController
 import app.gamenative.ui.util.SnackbarManager
 import app.gamenative.utils.BestConfigService
 import app.gamenative.utils.ContainerUtils
+import app.gamenative.utils.ContainerUseLease
+import app.gamenative.utils.ContainerCompatibilityAnalyzer
+import app.gamenative.utils.ContainerSelectionCoordinator
+import app.gamenative.utils.GameContainerRepository
+import app.gamenative.utils.PrefixMutationPlanner
+import app.gamenative.data.GameLaunchProfile
+import app.gamenative.utils.LatePrefixMutationChoice
+import app.gamenative.utils.LatePrefixMutationDecisionManager
 import app.gamenative.utils.DebugReportUtils
 import app.gamenative.utils.PlatformAuthUtils
 import app.gamenative.utils.CustomGameScanner
@@ -138,6 +149,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -309,12 +322,39 @@ fun PluviaMain(
     val scope = rememberCoroutineScope()
 
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val latePrefixDecision by LatePrefixMutationDecisionManager.decisions.collectAsStateWithLifecycle()
+    DisposableEffect(Unit) {
+        onDispose { LatePrefixMutationDecisionManager.cancelPending() }
+    }
 
     var msgDialogState by rememberSaveable(stateSaver = MessageDialogState.Saver) {
         mutableStateOf(MessageDialogState(false))
     }
     val setMessageDialogState: (MessageDialogState) -> Unit = { msgDialogState = it }
     var membershipPitchTrigger by rememberSaveable { mutableStateOf("launch") }
+
+    latePrefixDecision?.let { decision ->
+        AlertDialog(
+            onDismissRequest = { LatePrefixMutationDecisionManager.resolve(decision.requestId, LatePrefixMutationChoice.CANCEL) },
+            title = { Text(stringResource(R.string.late_prefix_mutation_title)) },
+            text = { Text(stringResource(R.string.late_prefix_mutation_message, decision.mutationPlan.reasons.joinToString())) },
+            confirmButton = {
+                TextButton(onClick = {
+                    LatePrefixMutationDecisionManager.resolve(decision.requestId, LatePrefixMutationChoice.CREATE_NEW)
+                }) { Text(stringResource(R.string.create_recommended_container)) }
+            },
+            dismissButton = {
+                Row {
+                    TextButton(onClick = {
+                        LatePrefixMutationDecisionManager.resolve(decision.requestId, LatePrefixMutationChoice.RETAIN_SHARED_BASE)
+                    }) { Text(stringResource(R.string.retain_shared_container_base)) }
+                    TextButton(onClick = {
+                        LatePrefixMutationDecisionManager.resolve(decision.requestId, LatePrefixMutationChoice.CANCEL)
+                    }) { Text(stringResource(R.string.cancel)) }
+                }
+            },
+        )
+    }
 
     var gameFeedbackState by rememberSaveable(stateSaver = GameFeedbackDialogState.Saver) {
         mutableStateOf(GameFeedbackDialogState(false))
@@ -1896,23 +1936,115 @@ fun preLaunchApp(
         // create container if it does not already exist
         // TODO: combine somehow with container creation in HomeLibraryAppScreen
         val containerManager = ContainerManager(context)
-        val container = if (useTemporaryOverride) {
+        var container = if (useTemporaryOverride) {
             ContainerUtils.getOrCreateContainerWithOverride(context, appId)
         } else {
             ContainerUtils.getOrCreateContainer(context, appId)
         }
 
+        var launchLease = try {
+            ContainerUseLease.beginLaunch(container.id, appId)
+        } catch (busy: ContainerUseLease.BusyException) {
+            setLoadingDialogVisible(false)
+            setMessageDialogState(
+                MessageDialogState(
+                    visible = true,
+                    type = DialogType.SYNC_FAIL,
+                    title = context.getString(R.string.shared_container_busy_title),
+                    message = context.getString(R.string.shared_container_busy_message, busy.owner.appId),
+                    dismissBtnText = context.getString(R.string.ok),
+                ),
+            )
+            return@launch
+        }
+
+        currentCoroutineContext()[Job]?.invokeOnCompletion {
+            launchLease.abortUnlessHandedOff()
+        }
+
+        // Installation may have made pre-installers discoverable after the original container
+        // choice. Re-plan now, while the selected shared container is exclusively leased, and do
+        // not enter imagefs/prefix setup until the user resolves any newly discovered mutation.
+        val binding = GameContainerRepository.binding(appId)
+        val linkedGameCount = binding?.let { GameContainerRepository.linkedGames(it.containerId).size } ?: 0
+        if (linkedGameCount > 1) {
+            val sharedContainerId = binding?.containerId ?: return@launch
+            val latePlan = PrefixMutationPlanner.planForContainer(
+                context,
+                appId,
+                container,
+                ContainerUtils.resolveGameFolderPath(appId),
+            )
+            if (PrefixMutationPlanner.requiresLateDecision(linkedGameCount, latePlan)) {
+                val requestedBase = ContainerUtils.resolveRecommendedContainerData(context, appId)
+                val compatibility = ContainerCompatibilityAnalyzer.analyze(
+                    ContainerUtils.toContainerData(container),
+                    requestedBase,
+                    mutatesPrefix = true,
+                    prefixMutationReasons = latePlan.reasons,
+                )
+                setLoadingDialogVisible(false)
+                val outcome = LatePrefixMutationDecisionManager.request(
+                    appId,
+                    container.id,
+                    latePlan,
+                    requestedBase,
+                    compatibility,
+                )
+                when (outcome.choice) {
+                    LatePrefixMutationChoice.CANCEL -> {
+                        launchLease.close()
+                        setLoadingDialogVisible(false)
+                        return@launch
+                    }
+                    LatePrefixMutationChoice.RETAIN_SHARED_BASE -> {
+                        setLoadingDialogVisible(true)
+                        check(LatePrefixMutationDecisionManager.consumeApproval(outcome.fingerprint))
+                        val patch = ContainerSelectionCoordinator.launchPatchFor(compatibility, retainSharedBase = true)
+                        if (patch != null) {
+                            val now = System.currentTimeMillis()
+                            val oldProfile = GameContainerRepository.profile(appId)
+                            val mergedPatch = app.gamenative.data.ContainerConfigPatch.decode(oldProfile?.runtimeConfigPatch).merge(patch)
+                            GameContainerRepository.saveProfile(
+                                oldProfile?.copy(runtimeConfigPatch = mergedPatch.encode(), updatedAt = now)
+                                    ?: GameLaunchProfile(
+                                        appId = appId,
+                                        gameFolderPath = ContainerUtils.resolveGameFolderPath(appId),
+                                        runtimeConfigPatch = mergedPatch.encode(),
+                                        createdAt = now,
+                                        updatedAt = now,
+                                    ),
+                            )
+                        }
+                    }
+                    LatePrefixMutationChoice.CREATE_NEW -> {
+                        setLoadingDialogVisible(true)
+                        launchLease.close()
+                        val oldProfile = GameContainerRepository.profile(appId)
+                        val newContainerId = GameContainerRepository.newContainerId()
+                        try {
+                            launchLease = ContainerUseLease.beginLaunch(newContainerId, appId)
+                            GameContainerRepository.bind(appId, newContainerId, oldProfile)
+                            val newContainer = ContainerUtils.getOrCreateContainer(context, appId)
+                            ContainerUtils.saveSharedContainerBase(context, newContainerId, requestedBase)
+                            container = newContainer
+                        } catch (error: Exception) {
+                            launchLease.close()
+                            GameContainerRepository.bind(appId, sharedContainerId, oldProfile)
+                            setLoadingDialogVisible(false)
+                            return@launch
+                        }
+                    }
+                }
+            }
+        }
+
         // Clear session metadata on every launch to ensure fresh values
         container.clearSessionMetadata()
 
-        // Apply game-specific fixes before anything reads the container config. Some fixes
-        // change launch-mode flags (e.g. bionic Steam) that the download/dependency steps
-        // below and MainViewModel.launchApp consume, so this must run first.
-        try {
-            GameFixesRegistry.applyFor(context, appId, container)
-        } catch (e: Exception) {
-            Timber.tag("GameFixes").w(e, "Game fixes failed in preLaunchApp")
-        }
+        // Game fixes run after the token is handed into XServer. There they receive the isolated
+        // launch container: launch-argument/environment fixes cannot mutate shared metadata, while
+        // registry/prefix fixes remain protected by this continuously-held lease.
 
         val gameSource = ContainerUtils.extractGameSourceFromContainerId(appId)
         val isLocalSavesOnly = ContainerUtils.isLocalSavesOnly(context, appId)
@@ -2150,7 +2282,7 @@ fun preLaunchApp(
         if (isCustomGame) {
             Timber.tag("preLaunchApp").i("Custom Game detected for $appId — skipping Steam Cloud sync and launching container")
             setLoadingDialogVisible(false)
-            onSuccess(context, appId)
+            launchLease.handoff { onSuccess(context, appId) }
             return@launch
         }
 
@@ -2210,7 +2342,7 @@ fun preLaunchApp(
             }
 
             setLoadingDialogVisible(false)
-            onSuccess(context, appId)
+            launchLease.handoff { onSuccess(context, appId) }
             return@launch
         }
 
@@ -2219,7 +2351,7 @@ fun preLaunchApp(
         if (isAmazonGame) {
             Timber.tag("preLaunchApp").i("Amazon Game detected for $appId — skipping cloud sync and launching container")
             setLoadingDialogVisible(false)
-            onSuccess(context, appId)
+            launchLease.handoff { onSuccess(context, appId) }
             return@launch
         }
 
@@ -2251,7 +2383,7 @@ fun preLaunchApp(
             EpicService.cleanupLaunchTokens(context, container)
 
             setLoadingDialogVisible(false)
-            onSuccess(context, appId)
+            launchLease.handoff { onSuccess(context, appId) }
             return@launch
         }
 
@@ -2262,7 +2394,7 @@ fun preLaunchApp(
                 Timber.tag("preLaunchApp").w("Skipping Steam Cloud sync for $appId by user request")
             }
             setLoadingDialogVisible(false)
-            onSuccess(context, appId)
+            launchLease.handoff { onSuccess(context, appId) }
             return@launch
         }
 
@@ -2667,7 +2799,9 @@ fun preLaunchApp(
 
             SyncResult.UpToDate,
             SyncResult.Success,
-            -> onSuccess(context, appId)
+            -> {
+                launchLease.handoff { onSuccess(context, appId) }
+            }
         }
     }
 }

@@ -1015,7 +1015,7 @@ class SteamAppScreen : BaseAppScreen() {
             }
             try {
                 val info = withContext(Dispatchers.IO) {
-                    val container = ContainerManager(context).getContainerById("STEAM_$gameId")
+                    val container = runCatching { ContainerUtils.getContainer(context, "STEAM_$gameId") }.getOrNull()
                     val language = container?.language ?: PrefManager.containerLanguage
                     val depots = SteamService.getDownloadableDepots(gameId, language)
                     Timber.i("There are ${depots.size} depots belonging to ${libraryItem.appId}")

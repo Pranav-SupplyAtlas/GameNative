@@ -72,25 +72,9 @@ object IntentLaunchManager {
     fun applyTemporaryConfigOverride(context: Context, appId: String, configOverride: ContainerData) {
         try {
             TemporaryConfigStore.setOverride(appId, configOverride)
-
-            if (ContainerUtils.hasContainer(context, appId)) {
-                val container = ContainerUtils.getContainer(context, appId)
-
-                // Backup original config before applying override (only once)
-                if (TemporaryConfigStore.getOriginalConfig(appId) == null) {
-                    val originalConfig = ContainerUtils.toContainerData(container)
-                    TemporaryConfigStore.setOriginalConfig(appId, originalConfig)
-                }
-
-                // Get the effective config (merge base with override)
-                val effectiveConfig = getEffectiveContainerConfig(context, appId)
-                if (effectiveConfig != null) {
-                    ContainerUtils.applyToContainer(context, container, effectiveConfig, saveToDisk = false)
-                    Timber.i("[IntentLaunchManager]: Applied temporary config override for app $appId (in-memory only)")
-                }
-            } else {
-                Timber.i("[IntentLaunchManager]: Stored temporary config override for app $appId (container will be created on launch)")
-            }
+            // Deliberately do not touch Container or user.reg. The launch entry point consumes the
+            // override into an isolated LaunchSession; restore-after-launch is not crash safe.
+            Timber.i("[IntentLaunchManager]: Stored session-only override for app $appId")
         } catch (e: Exception) {
             Timber.e(e, "[IntentLaunchManager]: Failed to apply temporary config override for app $appId")
             throw e
@@ -130,16 +114,8 @@ object IntentLaunchManager {
     }
 
     fun restoreOriginalConfiguration(context: Context, appId: String) {
-        try {
-            val originalConfig = TemporaryConfigStore.getOriginalConfig(appId)
-            if (originalConfig != null && ContainerUtils.hasContainer(context, appId)) {
-                val container = ContainerUtils.getContainer(context, appId)
-                ContainerUtils.applyToContainer(context, container, originalConfig, saveToDisk = false)
-                Timber.i("[IntentLaunchManager]: Restored original configuration for app $appId")
-            }
-        } catch (e: Exception) {
-            Timber.e(e, "[IntentLaunchManager]: Failed to restore original configuration for app $appId")
-        }
+        // No-op: session overrides never mutate persistent or singleton container state.
+        clearTemporaryOverride(appId)
     }
 
     fun hasTemporaryOverride(appId: String): Boolean {

@@ -20,6 +20,7 @@ import app.gamenative.ui.data.GameDisplayInfo
 import app.gamenative.ui.enums.AppOptionMenuType
 import app.gamenative.ui.util.SnackbarManager
 import app.gamenative.utils.ContainerUtils
+import app.gamenative.utils.GameContainerRepository
 import app.gamenative.utils.CustomGameScanner
 import app.gamenative.utils.GameMetadataManager
 import app.gamenative.utils.SteamGridDB
@@ -281,13 +282,12 @@ class CustomGameAppScreen : BaseAppScreen() {
 
                 if (shouldExtract) {
                     // First, try using the container's selected executable if available
-                    val containerManager = com.winlator.container.ContainerManager(context)
-                    val hasContainer = containerManager.hasContainer(libraryItem.appId)
+                    val hasContainer = ContainerUtils.hasContainer(context, libraryItem.appId)
                     Timber.tag("CustomGameAppScreen").d("Container exists: $hasContainer")
 
                     if (hasContainer) {
-                        val container = containerManager.getContainerById(libraryItem.appId)
-                        val relExe = container.executablePath
+                        val relExe = GameContainerRepository.profile(libraryItem.appId)?.executablePath
+                            ?: ContainerUtils.getContainer(context, libraryItem.appId).executablePath
                         Timber.tag("CustomGameAppScreen").d("Container executable path: ${relExe ?: "null"}")
 
                         if (!relExe.isNullOrEmpty()) {
@@ -562,7 +562,5 @@ class CustomGameAppScreen : BaseAppScreen() {
         }
     }
 }
-
-
 
 

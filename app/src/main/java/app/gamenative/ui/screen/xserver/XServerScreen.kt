@@ -125,6 +125,7 @@ import app.gamenative.ui.data.XServerState
 import app.gamenative.ui.widget.PerformanceHudView
 import app.gamenative.utils.AssetUtils
 import app.gamenative.utils.ContainerUtils
+import app.gamenative.utils.ContainerUseLease
 import app.gamenative.utils.downloader.CoreDriverDownloader
 import app.gamenative.utils.CustomGameScanner
 import app.gamenative.utils.ExecutableSelectionUtils
@@ -438,8 +439,25 @@ fun XServerScreen(
         isExiting.set(false)
     }
 
-    val container = remember(appId) {
-        ContainerUtils.getContainer(context, appId)
+    val launchSession = remember(appId) { ContainerUtils.buildLaunchSession(context, appId) }
+    val container = remember(appId, launchSession) {
+        ContainerUtils.createLaunchContainer(launchSession, ContainerUtils.getContainer(context, appId))
+    }
+    val containerLease = remember(appId, launchSession.containerId) {
+        runCatching {
+            ContainerUseLease.claimLaunch(launchSession.containerId, appId)
+                ?: ContainerUseLease.acquire(launchSession.containerId, appId, ContainerUseLease.Kind.GAME)
+        }.onFailure { error ->
+            val busy = error as? ContainerUseLease.BusyException
+            onGameLaunchError?.invoke(
+                busy?.let { "${it.owner.appId} is already using this shared container. Close it before launching $appId." }
+                    ?: (error.message ?: "Unable to reserve container"),
+            )
+        }.getOrNull()
+    }
+    DisposableEffect(containerLease) {
+        if (containerLease == null) navigateBack()
+        onDispose { containerLease?.close() }
     }
     val activity = remember(context) { BrightnessManager.findActivity(context) }
 
