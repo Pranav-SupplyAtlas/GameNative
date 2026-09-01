@@ -51,6 +51,7 @@ import app.gamenative.utils.BestConfigService
 import app.gamenative.utils.ContainerUtils
 import app.gamenative.utils.ContainerSelectionCoordinator
 import app.gamenative.utils.GameContainerRepository
+import app.gamenative.utils.PrefixMutationPlanner
 import app.gamenative.utils.CustomGameScanner
 import app.gamenative.utils.DiagnosticsLog
 import app.gamenative.utils.GameCompatibilityCache
@@ -1677,10 +1678,17 @@ abstract class BaseAppScreen {
         }
 
         if (showContainerSelection) {
-            val prefixMutatingInstall = libraryItem.gameSource != GameSource.CUSTOM_GAME
             val candidates = ContainerSelectionCoordinator.containers(context).map { candidate ->
+                val physical = com.winlator.container.ContainerManager(context).getContainerById(candidate.id)
+                val mutationPlan = PrefixMutationPlanner.planForContainer(
+                    context,
+                    appId,
+                    physical,
+                    getInstallPath(context, libraryItem)
+                        ?: if (libraryItem.gameSource == GameSource.CUSTOM_GAME) CustomGameScanner.getFolderPathFromAppId(appId) else null,
+                )
                 candidate to ContainerSelectionCoordinator.review(
-                    context, candidate.id, requestedContainerData, prefixMutatingInstall,
+                    context, candidate.id, requestedContainerData, mutationPlan,
                 ).compatibility
             }
             ContainerSelectionDialog(
@@ -1694,10 +1702,19 @@ abstract class BaseAppScreen {
                     val executable = if (libraryItem.gameSource == GameSource.CUSTOM_GAME && folder != null) {
                         CustomGameScanner.findUniqueExeRelativeToFolder(folder)
                     } else null
+                    val reviewedResult = (choice as? ContainerSelectionCoordinator.Choice.UseExistingContainer)?.let { existing ->
+                        candidates.firstOrNull { it.first.id == existing.containerId }?.second
+                    }
+                    val runtimePatch = ContainerSelectionCoordinator.launchPatchFor(
+                        reviewedResult,
+                        retainSharedBase = (choice as? ContainerSelectionCoordinator.Choice.UseExistingContainer)
+                            ?.retainSharedBaseOnConflict == true,
+                    )
                     val profile = GameLaunchProfile(
                         appId = appId,
                         gameFolderPath = folder,
                         executablePath = executable,
+                        runtimeConfigPatch = runtimePatch?.encode(),
                         createdAt = now,
                         updatedAt = now,
                     )

@@ -56,6 +56,13 @@ object GameFixesRegistry {
 
     private var fixesProvider: () -> Map<Pair<GameSource, String>, GameFix> = { fixes }
 
+    fun prefixMutationReason(context: Context, appId: String): String? {
+        val source = ContainerUtils.extractGameSourceFromContainerId(appId)
+        val gameId = ContainerUtils.extractGameIdFromContainerId(appId).toString()
+        val key = if (source == GameSource.EPIC) EpicService.getEpicGameOf(gameId.toInt())?.catalogId ?: gameId else gameId
+        return fixesProvider()[source to key]?.takeIf(GameFix::mutatesPrefix)?.mutationReason ?: return null
+    }
+
     fun applyFor(context: Context, appId: String, container: Container) {
         val source = ContainerUtils.extractGameSourceFromContainerId(appId)
         val gameId = ContainerUtils.extractGameIdFromContainerId(appId)?.toString() ?: return

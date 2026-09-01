@@ -14,6 +14,8 @@ class RegistryKeyFix(
     private val registryKey: String,
     private val defaultValues: Map<String, String>,
 ) : GameFix {
+    override val mutatesPrefix = true
+    override val mutationReason = "registry fix"
     override fun apply(
         context: Context,
         gameId: String,
@@ -55,4 +57,7 @@ class KeyedRegistryKeyFix(
     override val gameId: String,
     registryKey: String,
     defaultValues: Map<String, String>,
-) : KeyedGameFix, GameFix by RegistryKeyFix(registryKey, defaultValues)
+) : KeyedGameFix, GameFix by RegistryKeyFix(registryKey, defaultValues) {
+    override val mutatesPrefix = true
+    override val mutationReason = "registry fix"
+}

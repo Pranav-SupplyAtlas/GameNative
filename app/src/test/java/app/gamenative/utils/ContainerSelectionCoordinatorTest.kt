@@ -2,7 +2,9 @@ package app.gamenative.utils
 
 import app.gamenative.data.GameContainerBinding
 import app.gamenative.data.GameLaunchProfile
+import app.gamenative.data.ContainerConfigPatch
 import app.gamenative.db.dao.GameContainerDao
+import com.winlator.container.ContainerData
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Test
@@ -38,5 +40,39 @@ class ContainerSelectionCoordinatorTest {
         assertEquals(selected, dao.binding("GOG_2")?.containerId)
         assertEquals(true, selected.startsWith("container_"))
         assertNotEquals("GOG_2", selected)
+    }
+
+    @Test fun `profile-only selection carries exact runtime patch`() {
+        val dao = FakeDao().also(GameContainerRepository::initialize)
+        val patch = ContainerConfigPatch(screenSize = "1280x720", enableXInput = false)
+        val selectedPatch = ContainerSelectionCoordinator.launchPatchFor(
+            ContainerCompatibilityAnalyzer.Result.LaunchProfileOnly(patch),
+            retainSharedBase = false,
+        )
+        assertEquals(patch, selectedPatch)
+        val now = System.currentTimeMillis()
+        ContainerSelectionCoordinator.commit(
+            "STEAM_3",
+            ContainerSelectionCoordinator.Choice.UseExistingContainer("shared"),
+            GameLaunchProfile("STEAM_3", runtimeConfigPatch = selectedPatch?.encode(), createdAt = now, updatedAt = now),
+        )
+        assertEquals(patch, ContainerConfigPatch.decode(dao.profile("STEAM_3")?.runtimeConfigPatch))
+    }
+
+    @Test fun `conflict patch is retained only for explicit retain-base choice`() {
+        val patch = ContainerConfigPatch(dxWrapper = "vkd3d")
+        val conflict = ContainerCompatibilityAnalyzer.Result.SharedBaseConflict(listOf("Wine version"), patch)
+        assertEquals(null, ContainerSelectionCoordinator.launchPatchFor(conflict, retainSharedBase = false))
+        assertEquals(patch, ContainerSelectionCoordinator.launchPatchFor(conflict, retainSharedBase = true))
+    }
+
+    @Test fun `binding an existing container never changes reviewed shared base`() {
+        FakeDao().also(GameContainerRepository::initialize)
+        val sharedBase = ContainerData(wineVersion = "shared-wine", screenSize = "1920x1080")
+        val snapshot = sharedBase.copy()
+        ContainerSelectionCoordinator.commit(
+            "EPIC_4", ContainerSelectionCoordinator.Choice.UseExistingContainer("shared", true),
+        )
+        assertEquals(snapshot, sharedBase)
     }
 }

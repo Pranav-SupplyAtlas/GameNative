@@ -15,13 +15,18 @@ object ContainerCompatibilityAnalyzer {
         data class SharedBaseConflict(val reasons: List<String>, val launchPatch: ContainerConfigPatch) : Result
     }
 
-    fun analyze(current: ContainerData, requested: ContainerData, mutatesPrefix: Boolean = false): Result {
+    fun analyze(
+        current: ContainerData,
+        requested: ContainerData,
+        mutatesPrefix: Boolean = false,
+        prefixMutationReasons: List<String> = emptyList(),
+    ): Result {
         val conflicts = buildList {
             if (current.containerVariant != requested.containerVariant) add("container variant")
             if (current.wineVersion != requested.wineVersion) add("Wine version")
             if (current.wow64Mode != requested.wow64Mode) add("WoW64 architecture")
             if (current.wincomponents != requested.wincomponents) add("Wine components")
-            if (mutatesPrefix) add("prefix installer or registry fix")
+            if (mutatesPrefix) addAll(prefixMutationReasons.ifEmpty { listOf("prefix installer or registry fix") })
         }
         val patch = runtimePatch(current, requested)
         if (conflicts.isNotEmpty()) return Result.SharedBaseConflict(conflicts, patch)

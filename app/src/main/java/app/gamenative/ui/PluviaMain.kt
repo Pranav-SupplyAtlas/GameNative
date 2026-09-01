@@ -66,7 +66,6 @@ import app.gamenative.enums.PathType
 import app.gamenative.enums.SaveLocation
 import app.gamenative.enums.SyncResult
 import app.gamenative.events.AndroidEvent
-import app.gamenative.gamefixes.GameFixesRegistry
 import app.gamenative.service.ActiveGameRegistry
 import app.gamenative.service.SteamService
 import app.gamenative.service.amazon.AmazonService
@@ -1903,16 +1902,8 @@ fun preLaunchApp(
             ContainerUtils.getOrCreateContainer(context, appId)
         }
 
-        // Clear session metadata on every launch to ensure fresh values
-        container.clearSessionMetadata()
-
-        // Apply game-specific fixes before anything reads the container config. Some fixes
-        // change launch-mode flags (e.g. bionic Steam) that the download/dependency steps
-        // below and MainViewModel.launchApp consume, so this must run first.
-        try {
-            ContainerUseLease.acquire(container.id, appId, ContainerUseLease.Kind.PREFIX_MUTATION).use {
-                GameFixesRegistry.applyFor(context, appId, container)
-            }
+        val launchLease = try {
+            ContainerUseLease.beginLaunch(container.id, appId)
         } catch (busy: ContainerUseLease.BusyException) {
             setLoadingDialogVisible(false)
             setMessageDialogState(
@@ -1925,9 +1916,18 @@ fun preLaunchApp(
                 ),
             )
             return@launch
-        } catch (e: Exception) {
-            Timber.tag("GameFixes").w(e, "Game fixes failed in preLaunchApp")
         }
+
+        currentCoroutineContext()[Job]?.invokeOnCompletion {
+            launchLease.abortUnlessHandedOff()
+        }
+
+        // Clear session metadata on every launch to ensure fresh values
+        container.clearSessionMetadata()
+
+        // Game fixes run after the token is handed into XServer. There they receive the isolated
+        // launch container: launch-argument/environment fixes cannot mutate shared metadata, while
+        // registry/prefix fixes remain protected by this continuously-held lease.
 
         val gameSource = ContainerUtils.extractGameSourceFromContainerId(appId)
         val isLocalSavesOnly = ContainerUtils.isLocalSavesOnly(context, appId)
@@ -2165,7 +2165,7 @@ fun preLaunchApp(
         if (isCustomGame) {
             Timber.tag("preLaunchApp").i("Custom Game detected for $appId — skipping Steam Cloud sync and launching container")
             setLoadingDialogVisible(false)
-            onSuccess(context, appId)
+            launchLease.handoff { onSuccess(context, appId) }
             return@launch
         }
 
@@ -2225,7 +2225,7 @@ fun preLaunchApp(
             }
 
             setLoadingDialogVisible(false)
-            onSuccess(context, appId)
+            launchLease.handoff { onSuccess(context, appId) }
             return@launch
         }
 
@@ -2234,7 +2234,7 @@ fun preLaunchApp(
         if (isAmazonGame) {
             Timber.tag("preLaunchApp").i("Amazon Game detected for $appId — skipping cloud sync and launching container")
             setLoadingDialogVisible(false)
-            onSuccess(context, appId)
+            launchLease.handoff { onSuccess(context, appId) }
             return@launch
         }
 
@@ -2266,7 +2266,7 @@ fun preLaunchApp(
             EpicService.cleanupLaunchTokens(context, container)
 
             setLoadingDialogVisible(false)
-            onSuccess(context, appId)
+            launchLease.handoff { onSuccess(context, appId) }
             return@launch
         }
 
@@ -2277,7 +2277,7 @@ fun preLaunchApp(
                 Timber.tag("preLaunchApp").w("Skipping Steam Cloud sync for $appId by user request")
             }
             setLoadingDialogVisible(false)
-            onSuccess(context, appId)
+            launchLease.handoff { onSuccess(context, appId) }
             return@launch
         }
 
@@ -2682,7 +2682,9 @@ fun preLaunchApp(
 
             SyncResult.UpToDate,
             SyncResult.Success,
-            -> onSuccess(context, appId)
+            -> {
+                launchLease.handoff { onSuccess(context, appId) }
+            }
         }
     }
 }

@@ -445,7 +445,8 @@ fun XServerScreen(
     }
     val containerLease = remember(appId, launchSession.containerId) {
         runCatching {
-            ContainerUseLease.acquire(launchSession.containerId, appId, ContainerUseLease.Kind.GAME)
+            ContainerUseLease.claimLaunch(launchSession.containerId, appId)
+                ?: ContainerUseLease.acquire(launchSession.containerId, appId, ContainerUseLease.Kind.GAME)
         }.onFailure { error ->
             val busy = error as? ContainerUseLease.BusyException
             onGameLaunchError?.invoke(

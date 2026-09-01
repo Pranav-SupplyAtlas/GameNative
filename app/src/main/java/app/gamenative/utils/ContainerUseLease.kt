@@ -11,6 +11,59 @@ object ContainerUseLease {
     )
     private data class Entry(val owner: Owner, var references: Int)
     private val active = ConcurrentHashMap<String, Entry>()
+    private val pendingLaunches = ConcurrentHashMap<String, LaunchToken>()
+
+    class LaunchToken internal constructor(
+        val containerId: String,
+        val appId: String,
+        private val lease: AutoCloseable,
+    ) {
+        @Volatile private var handedOff = false
+        @Volatile private var closed = false
+
+        fun handoff() {
+            check(!closed)
+            handedOff = true
+            pendingLaunches[appId] = this
+        }
+
+        inline fun handoff(action: () -> Unit) {
+            handoff()
+            try {
+                action()
+            } catch (error: Throwable) {
+                close()
+                throw error
+            }
+        }
+
+        internal fun claim(): AutoCloseable {
+            check(handedOff && !closed)
+            return AutoCloseable { close() }
+        }
+
+        fun abortUnlessHandedOff() { if (!handedOff) close() }
+        fun close() {
+            synchronized(this) {
+                if (closed) return
+                closed = true
+                pendingLaunches.remove(appId, this)
+                lease.close()
+            }
+        }
+    }
+
+    fun beginLaunch(containerId: String, appId: String): LaunchToken = synchronized(active) {
+        active[containerId]?.let { throw BusyException(containerId, it.owner) }
+        LaunchToken(containerId, appId, acquire(containerId, appId, Kind.GAME))
+    }
+
+    /** Claims the exact prelaunch token, keeping ownership continuous across navigation. */
+    fun claimLaunch(containerId: String, appId: String): AutoCloseable? {
+        val token = pendingLaunches.remove(appId) ?: return null
+        check(token.containerId == containerId)
+        return token.claim()
+    }
 
     fun acquire(containerId: String, appId: String, kind: Kind): AutoCloseable {
         val owner = Owner(appId, kind)

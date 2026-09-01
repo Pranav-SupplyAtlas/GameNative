@@ -2,11 +2,21 @@ package app.gamenative.utils
 
 import android.content.Context
 import app.gamenative.data.GameLaunchProfile
+import app.gamenative.data.ContainerConfigPatch
 import com.winlator.container.ContainerData
 import com.winlator.container.ContainerManager
 
 /** Domain model consumed by install/configure UIs. NewContainer is intentionally the default. */
 object ContainerSelectionCoordinator {
+    fun launchPatchFor(
+        result: ContainerCompatibilityAnalyzer.Result?,
+        retainSharedBase: Boolean,
+    ): ContainerConfigPatch? = when (result) {
+        is ContainerCompatibilityAnalyzer.Result.LaunchProfileOnly -> result.patch
+        is ContainerCompatibilityAnalyzer.Result.SharedBaseConflict -> result.launchPatch.takeIf { retainSharedBase }
+        else -> null
+    }?.takeUnless { it == ContainerConfigPatch() }
+
     sealed interface Choice {
         data object CreateNewContainer : Choice
         data class UseExistingContainer(val containerId: String, val retainSharedBaseOnConflict: Boolean = false) : Choice
@@ -35,11 +45,20 @@ object ContainerSelectionCoordinator {
         )
     }
 
-    fun review(context: Context, containerId: String, requested: ContainerData, mutatesPrefix: Boolean): Review {
+    fun review(
+        context: Context,
+        containerId: String,
+        requested: ContainerData,
+        mutationPlan: PrefixMutationPlan = PrefixMutationPlan(emptyList()),
+    ): Review {
         val container = ContainerManager(context).getContainerById(containerId)
             ?: throw IllegalArgumentException("Unknown container $containerId")
         return Review(
-            compatibility = ContainerCompatibilityAnalyzer.analyze(ContainerUtils.toContainerData(container), requested, mutatesPrefix),
+            compatibility = ContainerCompatibilityAnalyzer.analyze(
+                ContainerUtils.toContainerData(container), requested,
+                mutatesPrefix = mutationPlan.mutatesPrefix,
+                prefixMutationReasons = mutationPlan.reasons,
+            ),
             existing = containers(context).firstOrNull { it.id == containerId },
         )
     }

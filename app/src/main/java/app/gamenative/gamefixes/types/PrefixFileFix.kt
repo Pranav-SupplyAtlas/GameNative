@@ -19,6 +19,8 @@ class PrefixFileFix(
     private val driveCRelativePath: String,
     private val content: String,
 ) : GameFix {
+    override val mutatesPrefix = true
+    override val mutationReason = "prefix file fix"
     override fun apply(
         context: Context,
         gameId: String,
@@ -48,4 +50,7 @@ class KeyedPrefixFileFix(
     override val gameId: String,
     driveCRelativePath: String,
     content: String,
-) : KeyedGameFix, GameFix by PrefixFileFix(driveCRelativePath, content)
+) : KeyedGameFix, GameFix by PrefixFileFix(driveCRelativePath, content) {
+    override val mutatesPrefix = true
+    override val mutationReason = "prefix file fix"
+}
